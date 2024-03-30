@@ -1,0 +1,12 @@
+.secret
+.public_key
+.secret2
+.secret3
+.secret4
+build/artifacts
+build/cache
+build/contracts
+.env
+package-lock.json
+node_modules
+yarn.lock
