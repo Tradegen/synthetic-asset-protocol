@@ -18,17 +18,17 @@ library TradegenMath {
     * @return time-scaled value.
     */
     function scaleByTime(uint256 currentValue, uint256 previousValue, uint256 currentTimestamp, uint256 startTimestamp, uint256 duration) internal pure returns (uint256) {
-        // Prevent division by 0
+        // Prevent division by 0.
         if (duration == 0) {
             return 0;
         }
 
-        // Prevent underflow
+        // Prevent underflow.
         if (startTimestamp > currentTimestamp) {
             return 0;
         }
 
-        // Prevent underflow
+        // Prevent underflow.
         if (duration + startTimestamp < currentTimestamp) {
             return 0;
         }
