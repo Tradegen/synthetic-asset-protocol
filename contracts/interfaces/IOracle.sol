@@ -15,4 +15,11 @@ interface IOracle {
     * @notice Returns the address of the oracle contract's data source.
     */
     function dataSource() external view returns (address);
+
+    /**
+    * @notice Returns the info needed to pay the usage fee for the given asset.
+    * @param _asset Address of the asset.
+    * @return address, uint256 The address of the asset's usage fee token and the asset's usage fee.
+    */
+    function getUsageFeeInfo(address _asset) external view returns (address, uint256);
 }

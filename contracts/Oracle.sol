@@ -40,6 +40,15 @@ contract Oracle is IOracle, Ownable {
         return IDataSource(dataSource).getLatestPrice(_asset);
     }
 
+    /**
+    * @notice Returns the info needed to pay the usage fee for the given asset.
+    * @param _asset Address of the asset.
+    * @return address, uint256 The address of the asset's usage fee token and the asset's usage fee.
+    */
+    function getUsageFeeInfo(address _asset) public view returns (address, uint256) {
+        return IDataSource(dataSource).getUsageFeeInfo(_asset);
+    }
+
     /* ========== RESTRICTED FUNCTIONS ========== */
 
     /**
