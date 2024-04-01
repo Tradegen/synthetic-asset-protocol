@@ -25,9 +25,9 @@ contract SyntheticAssetToken is ISyntheticAssetToken, ERC20, ReentrancyGuard {
     IProtocolSettings public protocolSettings;
     ITreasury public treasury;
     IERC20 public stablecoin;
-    address public asset;
+    address public override asset;
     uint256 public override maxSupply;
-    bool public mintingIsEnabled;
+    bool public override mintingIsEnabled;
 
     constructor(address _registry,
                 address _oracle,
@@ -93,7 +93,7 @@ contract SyntheticAssetToken is ISyntheticAssetToken, ERC20, ReentrancyGuard {
 
     /**
     * @notice Increases the maximum supply of tokens for this asset.
-    * @dev Only the SyntheticAssetRegistry contract can call this function.
+    * @dev Only the SyntheticAssetTokenRegistry contract can call this function.
     * @dev The new max supply must be higher than the current max supply.
     * @param _newMaxSupply The new maximum number of tokens that can exist for this asset.
     */
@@ -110,7 +110,7 @@ contract SyntheticAssetToken is ISyntheticAssetToken, ERC20, ReentrancyGuard {
 
     /**
     * @notice Enables, or disables, the ability to mint new tokens.
-    * @dev Only the SyntheticAssetRegistry contract can call this function.
+    * @dev Only the SyntheticAssetTokenRegistry contract can call this function.
     * @dev This function is meant to be used to protect the protocol from Black Swan events.
     * @param _enableMinting Whether to allow new tokens to be minted.
     */

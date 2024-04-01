@@ -14,6 +14,16 @@ interface ISyntheticAssetToken {
     function maxSupply() external view returns (uint256);
 
     /**
+    * @notice Returns the address of the synthetic asset's underlying data feed.
+    */
+    function asset() external view returns (address);
+
+    /**
+    * @notice Returns the asset's minting status.
+    */
+    function mintingIsEnabled() external view returns (bool);
+
+    /**
     * @notice Mints the given number of tokens for this asset.
     * @dev Transaction will revert if _numberOfTokens exceeds the available tokens to mint.
     * @dev Assumes that the user has already approved the asset's data feed's usage fee.
