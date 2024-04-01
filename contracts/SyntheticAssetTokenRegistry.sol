@@ -10,6 +10,7 @@ import "./openzeppelin-solidity/contracts/ERC20/IERC20.sol";
 // Interfaces.
 import './interfaces/ISyntheticAssetTokenFactory.sol';
 import './interfaces/ISyntheticAssetToken.sol';
+import './interfaces/IRouter.sol';
 
 // Inheritance.
 import './interfaces/ISyntheticAssetTokenRegistry.sol';
@@ -18,6 +19,7 @@ contract SyntheticAssetTokenRegistry is ISyntheticAssetTokenRegistry, Ownable {
     using SafeMath for uint256;
 
     ISyntheticAssetTokenFactory public immutable factory;
+    IRouter public immutable router;
 
     address public operator;
     address public registrar;
@@ -29,8 +31,9 @@ contract SyntheticAssetTokenRegistry is ISyntheticAssetTokenRegistry, Ownable {
     // (synthetic asset contract address => synthetic asset index).
     mapping (address => uint256) public assetToIndex;
 
-    constructor(address _factory) Ownable() {
+    constructor(address _factory, address _router) Ownable() {
         factory = ISyntheticAssetTokenFactory(_factory);
+        router = IRouter(_router);
 
         operator = msg.sender;
         registrar = msg.sender;
@@ -170,6 +173,9 @@ contract SyntheticAssetTokenRegistry is ISyntheticAssetTokenRegistry, Ownable {
 
         // Create the contract and get address.
         address syntheticAssetAddress = factory.createSyntheticAssetToken(_asset, _maxSupply, _name, _symbol);
+
+        // Create the orderbooks for the asset.
+        router.createOrderbooks(syntheticAssetAddress);
 
         numberOfSyntheticAssets = index;
         indexToAsset[index] = syntheticAssetAddress;
