@@ -12,6 +12,7 @@ import "./openzeppelin-solidity/contracts/SafeMath.sol";
 import './interfaces/IOracle.sol';
 import './interfaces/IProtocolSettings.sol';
 import './interfaces/ITreasury.sol';
+import './interfaces/ISyntheticAssetTokenRegistry.sol';
 
 // Inheritance.
 import './interfaces/ISyntheticAssetToken.sol';
@@ -20,7 +21,7 @@ contract SyntheticAssetToken is ISyntheticAssetToken, ERC20, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
 
-    address public registry;
+    ISyntheticAssetTokenRegistry public registry;
     IOracle public oracle;
     IProtocolSettings public protocolSettings;
     ITreasury public treasury;
@@ -40,7 +41,7 @@ contract SyntheticAssetToken is ISyntheticAssetToken, ERC20, ReentrancyGuard {
                 string memory _symbol)
                 ERC20(_name, _symbol) 
     {
-        registry = _registry;
+        registry = ISyntheticAssetTokenRegistry(_registry);
         oracle = IOracle(_oracle);
         protocolSettings = IProtocolSettings(_protocolSettings);
         treasury = ITreasury(_treasury);
@@ -123,7 +124,7 @@ contract SyntheticAssetToken is ISyntheticAssetToken, ERC20, ReentrancyGuard {
     /* ========== MODIFIERS ========== */
 
     modifier onlyRegistry() {
-        require(msg.sender == registry, "SyntheticAssetToken: Only the SyntheticAssetTokenRegistry contract can call this function.");
+        require(msg.sender == address(registry), "SyntheticAssetToken: Only the SyntheticAssetTokenRegistry contract can call this function.");
         _;
     }
 
