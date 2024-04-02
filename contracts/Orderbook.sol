@@ -19,6 +19,23 @@ contract Orderbook is IOrderbook, Ownable {
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
 
+    struct CancelledOrder {
+        uint256 amountCancelled;
+        uint256 previous;
+        uint256 next;
+    }
+
+    struct LookupValue {
+        bool isLastDigit;
+        uint8 previousDigit;
+    }
+
+    struct FilledOrder {
+        uint256 numberOfTokensFilled;
+        uint256 averageExecutionPrice;
+        uint256 timestamp;
+    }
+
     address public immutable router;
     IOracle public immutable oracle;
     IProtocolSettings public immutable protocolSettings;
@@ -32,12 +49,25 @@ contract Orderbook is IOrderbook, Ownable {
     uint256 public numberOfOrders;
     uint256 public end;
     uint256 public current;
-    // (user address => value of 'current' at which the order will be considered 'filled').
-    mapping (address => uint256) public userToQueueIndex;
+
     // (order index => user address).
     mapping (uint256 => address) public orderIndexToUser;
     // (user address => order index).
     mapping (address => uint256) public userToOrderIndex;
+
+    // Used to get the nearest index in the cancelled order ledger to a given index.
+    // Keys are in the format "<magnitude>/<prefix>/<metadata/digit>".
+    mapping (string => LookupValue) public cancelledOrderLookup;
+
+    // Keys represent order index.
+    mapping (uint256 => CancelledOrder) public cancelledOrders;
+
+    // (order index => value of 'current' at which the order will be considered 'filled').
+    // Starts at index 1.
+    mapping (uint256 => uint256) public orders;
+
+    // Keys represent order index.
+    mapping (uint256 => FilledOrder) public filledOrders;
 
     constructor(address _router, address _oracle, address _protocolSettings, address _stablecoin, address _syntheticAsset, bool _representsBuyOrders) Ownable() {
         router = _router;
@@ -55,8 +85,15 @@ contract Orderbook is IOrderbook, Ownable {
     * @param _orderIndex Index of the order.
     * @return uint256, uint256, uint256, uint256 The order size, number of tokens filled, execution price, and timestamp at which the order was filled.
     */
-    function getOrderInfo(uint256 _orderIndex) external view override returns (uint256, uint256, uint256, uint256) {
-        // TODO.
+    function getOrderInfo(uint256 _orderIndex) public view override returns (uint256, uint256, uint256, uint256) {
+        if (_orderIndex == 0 || _orderIndex > numberOfOrders) {
+            return (0, 0, 0, 0);
+        }
+
+        FilledOrder memory filledOrder = filledOrders[_orderIndex];
+        uint256 orderSize = orders[_orderIndex].sub(orders[_orderIndex.sub(1)]);
+
+        return (orderSize, filledOrder.numberOfTokensFilled, filledOrder.averageExecutionPrice, filledOrder.timestamp);
     }
 
     /**
@@ -66,7 +103,7 @@ contract Orderbook is IOrderbook, Ownable {
     * @return uint256, uint256, uint256, uint256 The order size, number of tokens filled, execution price, and timestamp at which the order was filled.
     */
     function getPendingOrderInfo(address _user) external view override returns (uint256, uint256, uint256, uint256) {
-        // TODO.
+        return getOrderInfo(userToOrderIndex[_user]);
     }
 
     /**
@@ -74,7 +111,11 @@ contract Orderbook is IOrderbook, Ownable {
     * @param _user Address of the user.
     */
     function getAvailableTokens(address _user) public view override returns (uint256) {
-        // TODO.
+        // The index is set to 0 when the user claims tokens.
+        // Since the indicies start at 1, index 0 is guaranteed to have a value of 0 for each variable in the struct.
+        uint256 orderIndex = userToOrderIndex[_user];
+
+        return filledOrders[orderIndex].numberOfTokensFilled;
     }
 
     /**
@@ -82,7 +123,10 @@ contract Orderbook is IOrderbook, Ownable {
     * @param _user Address of the user.
     */
     function getAvailableDollarAmount(address _user) external view override returns (uint256) {
-        // TODO.
+        uint256 orderIndex = userToOrderIndex[_user];
+        uint256 executionPrice = filledOrders[orderIndex].averageExecutionPrice;
+
+        return getAvailableTokens(_user).mul(executionPrice).div(10 ** 18);
     }
 
     /* ========== MUTATIVE FUNCTIONS ========== */
@@ -145,6 +189,6 @@ contract Orderbook is IOrderbook, Ownable {
 
     event PlacedOrder(address user, uint256 numberOfTokens, uint256 orderIndex);
     event ClaimedTokens(address user, uint256 numberOfTokens, uint256 dollarValue);
-    event CancelledOrder(address user, uint256 numberOfTokens, uint256 orderIndex);
+    event CancelledAnOrder(address user, uint256 numberOfTokens, uint256 orderIndex);
     event PausedTrading(bool tradingStatus);
 }
