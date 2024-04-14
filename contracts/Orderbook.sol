@@ -19,7 +19,6 @@ import "./libraries/Strings.sol";
 // Inheritance.
 import './interfaces/IOrderbook.sol';
 
-// TODO: account for metrics for computing market maker discount.
 contract Orderbook is IOrderbook, Ownable {
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
@@ -154,46 +153,40 @@ contract Orderbook is IOrderbook, Ownable {
     /**
     * @notice Places an order for the given number of tokens.
     * @dev Transaction will revert if _numberOfTokens exceeds the user's balance.
-    * @dev Only the Router contract can call this function.
-    * @param _user Address of the user.
     * @param _isBuy Whether the order represents a 'buy'.
     * @param _numberOfTokens The number of tokens to buy/sell.
-    * @return uint256 The number of tokens that could not be filled.
     */
-    function placeOrder(address _user, bool _isBuy, uint256 _numberOfTokens) external override onlyRouter returns (uint256) {
-        // TODO: account for market maker.
-
+    function placeOrder(bool _isBuy, uint256 _numberOfTokens) external override {
         require(!tradingIsPaused, "Orderbook: Cannot place orders when trading is paused.");
 
         bool isSameDirectionAsOrderbook = _isBuy && representsBuyOrders;
 
-        require(userToOrderIndex[_user] == 0 || (userToOrderIndex[_user] > 0 && !isSameDirectionAsOrderbook), "Orderbook: User already has an open order.");
+        require(userToOrderIndex[msg.sender] == 0 || (userToOrderIndex[msg.sender] > 0 && !isSameDirectionAsOrderbook), "Orderbook: User already has an open order.");
 
         if (isSameDirectionAsOrderbook) {
             if (_isBuy) {
-                stablecoin.safeTransferFrom(router, address(this), _numberOfTokens);
+                stablecoin.safeTransferFrom(msg.sender, address(this), _numberOfTokens);
             } else {
-                IERC20(syntheticAsset).safeTransferFrom(router, address(this), _numberOfTokens);
+                IERC20(syntheticAsset).safeTransferFrom(msg.sender, address(this), _numberOfTokens);
             }
 
             uint256 orderIndex = numberOfOrders.add(1);
             uint256 currentEnd = end;
             uint256 newEnd = currentEnd.add(_numberOfTokens);
             numberOfOrders = orderIndex;
-            orderIndexToUser[orderIndex] = _user;
-            userToOrderIndex[_user] = orderIndex;
+            orderIndexToUser[orderIndex] = msg.sender;
+            userToOrderIndex[msg.sender] = orderIndex;
             end = newEnd;
             orders[orderIndex] = newEnd;
 
-            emit PlacedOrder(_user, _numberOfTokens, orderIndex, 0);
-            return 0;
+            emit PlacedOrder(msg.sender, _numberOfTokens, orderIndex, 0);
         } else {
             {
             address feeToken;
             uint256 usageFee;
             (feeToken, usageFee) = oracle.getUsageFeeInfo(syntheticAsset);
 
-            IERC20(feeToken).safeTransferFrom(router, address(this), usageFee);
+            IERC20(feeToken).safeTransferFrom(msg.sender, address(this), usageFee);
             IERC20(feeToken).approve(address(oracle), usageFee);
             }
             uint256 oraclePrice = oracle.getLatestPrice(syntheticAsset);
@@ -204,11 +197,11 @@ contract Orderbook is IOrderbook, Ownable {
             // Pending orders are in synthetic asset tokens for the "sell" version of the orderbook.
             // In the "buy" version of the orderbook, pending orders are in stablecoin.
             if (_isBuy) {
-                stablecoin.safeTransferFrom(router, address(this), adjustedOrderSize.mul(oraclePrice).div(10 ** 18));
-                IERC20(syntheticAsset).safeTransfer(_user, adjustedOrderSize);
+                stablecoin.safeTransferFrom(msg.sender, address(this), adjustedOrderSize.mul(oraclePrice).div(10 ** 18));
+                IERC20(syntheticAsset).safeTransfer(msg.sender, adjustedOrderSize);
             } else {
-                IERC20(syntheticAsset).safeTransferFrom(router, address(this), adjustedOrderSize.mul(10 ** 18).div(oraclePrice));
-                stablecoin.safeTransfer(_user, adjustedOrderSize);
+                IERC20(syntheticAsset).safeTransferFrom(msg.sender, address(this), adjustedOrderSize.mul(10 ** 18).div(oraclePrice));
+                stablecoin.safeTransfer(msg.sender, adjustedOrderSize);
             }
 
             {
@@ -232,8 +225,7 @@ contract Orderbook is IOrderbook, Ownable {
             _addToFilledOrdersLookupStructure(newCurrent);
             }
 
-            emit ExecutedOrder(_user, adjustedOrderSize, oraclePrice);
-            return remainder;
+            emit ExecutedOrder(msg.sender, adjustedOrderSize, oraclePrice, remainder);
         }
     }
 
@@ -242,13 +234,11 @@ contract Orderbook is IOrderbook, Ownable {
     * @dev If _cancelFullOrder is set to true, _numberOfTokens is ignored.
     * @dev This function also claims all available tokens for the user.
     * @dev Transaction will revert if _numberOfTokens exceeds the user's order size.
-    * @dev Only the Router contract can call this function.
-    * @param _user Address of the user.
     * @param _numberOfTokens The number of tokens to cancel.
     * @param _cancelFullOrder Whether to fully cancel the order.
     */
-    function cancelOrder(address _user, uint256 _numberOfTokens, bool _cancelFullOrder) external override onlyRouter {
-        uint256 orderIndex = userToOrderIndex[_user];
+    function cancelOrder(uint256 _numberOfTokens, bool _cancelFullOrder) external override {
+        uint256 orderIndex = userToOrderIndex[msg.sender];
         require(orderIndex > 0, "Orderbook: User does not have an order.");
 
         uint256 orderSize = orders[orderIndex].sub(orders[orderIndex.sub(1)]);
@@ -278,22 +268,26 @@ contract Orderbook is IOrderbook, Ownable {
         } else {
             cancelledOrders[orderIndex].amountCancelled = cancelledOrders[orderIndex].amountCancelled.add(_numberOfTokens);
             cancelledOrders[orderIndex].timestamp = block.timestamp;
+
+            if (representsBuyOrders) {
+                stablecoin.safeTransfer(msg.sender, cancelledOrders[orderIndex].amountCancelled);
+            } else {
+                IERC20(syntheticAsset).safeTransfer(msg.sender, cancelledOrders[orderIndex].amountCancelled);
+            }
         }
 
         // Clear the user's order index if the order is considered fully cancelled.
         if (_cancelFullOrder || _numberOfTokens.add(cancelledOrders[orderIndex].amountCancelled) == orderSize) {
-            userToOrderIndex[_user] = 0;
+            userToOrderIndex[msg.sender] = 0;
             orderIndexToUser[orderIndex] = address(0);
         }
     }
 
     /**
     * @notice Claims all available tokens for the user.
-    * @dev Only the Router contract can call this function.
-    * @param _user Address of the user.
     */
-    function claimTokens(address _user) external override onlyRouter {
-        uint256 orderIndex = userToOrderIndex[_user];
+    function claimTokens() external override {
+        uint256 orderIndex = userToOrderIndex[msg.sender];
         require(orderIndex > 0, "Orderbook: User does not have an order.");
 
         uint256 orderSize = orders[orderIndex].sub(orders[orderIndex.sub(1)]);
@@ -307,17 +301,17 @@ contract Orderbook is IOrderbook, Ownable {
         uint256 amountFilled = (adjustedCurrent >= orders[orderIndex]) ? orderSize : orders[orderIndex].sub(adjustedCurrent);
 
         if (representsBuyOrders) {
-            IERC20(syntheticAsset).safeTransfer(_user, amountFilled.mul(10 ** 18).div(averageExecutionPrice));
+            IERC20(syntheticAsset).safeTransfer(msg.sender, amountFilled.mul(10 ** 18).div(averageExecutionPrice));
         } else {
-            stablecoin.safeTransfer(_user, amountFilled.mul(averageExecutionPrice).div(10 ** 18));
+            stablecoin.safeTransfer(msg.sender, amountFilled.mul(averageExecutionPrice).div(10 ** 18));
         }
 
         if (amountFilled == orderSize) {
-            userToOrderIndex[_user] = 0;
+            userToOrderIndex[msg.sender] = 0;
             orderIndexToUser[orderIndex] = address(0);
         }
 
-        emit ClaimedTokens(_user, amountFilled, averageExecutionPrice);
+        emit ClaimedTokens(msg.sender, amountFilled, averageExecutionPrice);
     }
 
     /* ========== INTERNAL FUNCTIONS ========== */
@@ -522,7 +516,7 @@ contract Orderbook is IOrderbook, Ownable {
 
     /**
     * @notice Pauses trading for this asset.
-    * @dev Only the operator of the Router contract can call this function.
+    * @dev Only the Router contract can call this function.
     * @dev This function is meant to be used to protect the protocol from Black Swan events.
     * @param _pauseTrading Whether to pause trading. Set this value to false to resume trading.
     */
@@ -547,7 +541,7 @@ contract Orderbook is IOrderbook, Ownable {
     /* ========== EVENTS ========== */
 
     event PlacedOrder(address user, uint256 numberOfTokens, uint256 orderIndex, uint256 remainder);
-    event ExecutedOrder(address user, uint256 numberOfTokens, uint256 executionPrice);
+    event ExecutedOrder(address user, uint256 numberOfTokens, uint256 executionPrice, uint256 remainder);
     event ClaimedTokens(address user, uint256 numberOfTokens, uint256 averageExecutionPrice);
     event CancelledAnOrder(address user, uint256 numberOfTokens, uint256 orderIndex);
     event PausedTrading(bool tradingStatus);

@@ -95,10 +95,10 @@ contract Router is IRouter, Ownable {
         }
 
         if (_isBuy) {
-            return IOrderbook(orderbooks.buyAddress).getAvailableTokens(_user);
+            return IOrderbook(orderbooks.buyAddress).getAvailableTokensForUser(_user);
         }
 
-        return IOrderbook(orderbooks.sellAddress).getAvailableTokens(_user);
+        return IOrderbook(orderbooks.sellAddress).getAvailableTokensForUser(_user);
     }
 
     /**
