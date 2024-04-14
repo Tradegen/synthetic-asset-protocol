@@ -35,4 +35,23 @@ library TradegenMath {
 
         return ((currentValue * (currentTimestamp - startTimestamp)) + (previousValue * (duration + startTimestamp - currentTimestamp))) / duration;
     }
+
+    /**
+    * @dev Calculate log10(x) rounding down, where x is unsigned 256-bit integer number.
+    * @param x unsigned 256-bit integer number.
+    * @return result log10(x) unsigned 256-bit integer number.
+    */
+    function log10(uint256 x) internal pure returns (uint256 result) {
+        result = 0;
+
+        while (x > 1) {
+            if (x >= 10**16) { x >>= 16; result += 16; }
+            if (x >= 10**8) { x >>= 8; result += 8; }
+            if (x >= 10**4) { x >>= 4; result += 4; }
+            if (x >= 10**2) { x >>= 2; result += 2; }
+            if (x >= 10**1) { x >>= 1; result += 1; }
+        }
+
+        return result;
+    }
 }

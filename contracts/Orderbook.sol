@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.3;
+pragma solidity ^0.8.12;
 
 // OpenZeppelin.
 import "./openzeppelin-solidity/contracts/Ownable.sol";
@@ -12,15 +12,21 @@ import "./openzeppelin-solidity/contracts/SafeMath.sol";
 import './interfaces/IOracle.sol';
 import './interfaces/IProtocolSettings.sol';
 
+// Libraries.
+import "./libraries/TradegenMath.sol";
+import "./libraries/Strings.sol";
+
 // Inheritance.
 import './interfaces/IOrderbook.sol';
 
+// TODO: account for metrics for computing market maker discount.
 contract Orderbook is IOrderbook, Ownable {
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
 
     struct CancelledOrder {
         uint256 amountCancelled;
+        uint256 timestamp;
         uint256 previous;
         uint256 next;
     }
@@ -32,8 +38,10 @@ contract Orderbook is IOrderbook, Ownable {
 
     struct FilledOrder {
         uint256 numberOfTokensFilled;
-        uint256 averageExecutionPrice;
+        uint256 executionPrice;
         uint256 timestamp;
+        uint256 previous;
+        uint256 next;
     }
 
     address public immutable router;
@@ -49,6 +57,7 @@ contract Orderbook is IOrderbook, Ownable {
     uint256 public numberOfOrders;
     uint256 public end;
     uint256 public current;
+    uint256 public lastFilledOrderKey;
 
     // (order index => user address).
     mapping (uint256 => address) public orderIndexToUser;
@@ -66,7 +75,11 @@ contract Orderbook is IOrderbook, Ownable {
     // Starts at index 1.
     mapping (uint256 => uint256) public orders;
 
-    // Keys represent order index.
+    // Used to get the nearest index in the filled order ledger to a given index.
+    // Keys are in the format "<magnitude>/<prefix>/<metadata/digit>".
+    mapping (string => LookupValue) public filledOrderLookup;
+
+    // Keys represent the new value of 'current' at the time the order was filled.
     mapping (uint256 => FilledOrder) public filledOrders;
 
     constructor(address _router, address _oracle, address _protocolSettings, address _stablecoin, address _syntheticAsset, bool _representsBuyOrders) Ownable() {
@@ -93,7 +106,7 @@ contract Orderbook is IOrderbook, Ownable {
         FilledOrder memory filledOrder = filledOrders[_orderIndex];
         uint256 orderSize = orders[_orderIndex].sub(orders[_orderIndex.sub(1)]);
 
-        return (orderSize, filledOrder.numberOfTokensFilled, filledOrder.averageExecutionPrice, filledOrder.timestamp);
+        return (orderSize, filledOrder.numberOfTokensFilled, filledOrder.executionPrice, filledOrder.timestamp);
     }
 
     /**
@@ -110,7 +123,7 @@ contract Orderbook is IOrderbook, Ownable {
     * @notice Returns the number of tokens that the given user can claim.
     * @param _user Address of the user.
     */
-    function getAvailableTokens(address _user) public view override returns (uint256) {
+    function getAvailableTokensForUser(address _user) public view override returns (uint256) {
         // The index is set to 0 when the user claims tokens.
         // Since the indicies start at 1, index 0 is guaranteed to have a value of 0 for each variable in the struct.
         uint256 orderIndex = userToOrderIndex[_user];
@@ -124,39 +137,385 @@ contract Orderbook is IOrderbook, Ownable {
     */
     function getAvailableDollarAmount(address _user) external view override returns (uint256) {
         uint256 orderIndex = userToOrderIndex[_user];
-        uint256 executionPrice = filledOrders[orderIndex].averageExecutionPrice;
+        uint256 executionPrice = filledOrders[orderIndex].executionPrice;
 
-        return getAvailableTokens(_user).mul(executionPrice).div(10 ** 18);
+        return getAvailableTokensForUser(_user).mul(executionPrice).div(10 ** 18);
+    }
+
+    /**
+    * @notice Returns the total size of open orders.
+    */
+    function getAvailableTokensInOrderbook() public view override returns (uint256) {
+        return end - current;
     }
 
     /* ========== MUTATIVE FUNCTIONS ========== */
 
     /**
     * @notice Places an order for the given number of tokens.
-    * @dev Transaction will revert if _numberOfTokens exceeds msg.sender's balance.
+    * @dev Transaction will revert if _numberOfTokens exceeds the user's balance.
+    * @dev Only the Router contract can call this function.
+    * @param _user Address of the user.
+    * @param _isBuy Whether the order represents a 'buy'.
     * @param _numberOfTokens The number of tokens to buy/sell.
+    * @return uint256 The number of tokens that could not be filled.
     */
-    function placeOrder(uint256 _numberOfTokens) external override {
-        // TODO.
+    function placeOrder(address _user, bool _isBuy, uint256 _numberOfTokens) external override onlyRouter returns (uint256) {
+        // TODO: account for market maker.
+
+        require(!tradingIsPaused, "Orderbook: Cannot place orders when trading is paused.");
+
+        bool isSameDirectionAsOrderbook = _isBuy && representsBuyOrders;
+
+        require(userToOrderIndex[_user] == 0 || (userToOrderIndex[_user] > 0 && !isSameDirectionAsOrderbook), "Orderbook: User already has an open order.");
+
+        if (isSameDirectionAsOrderbook) {
+            if (_isBuy) {
+                stablecoin.safeTransferFrom(router, address(this), _numberOfTokens);
+            } else {
+                IERC20(syntheticAsset).safeTransferFrom(router, address(this), _numberOfTokens);
+            }
+
+            uint256 orderIndex = numberOfOrders.add(1);
+            uint256 currentEnd = end;
+            uint256 newEnd = currentEnd.add(_numberOfTokens);
+            numberOfOrders = orderIndex;
+            orderIndexToUser[orderIndex] = _user;
+            userToOrderIndex[_user] = orderIndex;
+            end = newEnd;
+            orders[orderIndex] = newEnd;
+
+            emit PlacedOrder(_user, _numberOfTokens, orderIndex, 0);
+            return 0;
+        } else {
+            {
+            address feeToken;
+            uint256 usageFee;
+            (feeToken, usageFee) = oracle.getUsageFeeInfo(syntheticAsset);
+
+            IERC20(feeToken).safeTransferFrom(router, address(this), usageFee);
+            IERC20(feeToken).approve(address(oracle), usageFee);
+            }
+            uint256 oraclePrice = oracle.getLatestPrice(syntheticAsset);
+
+            // Amounts are in the pending orders' token.
+            (uint256 adjustedOrderSize, uint256 remainder) = _computeAdjustedOrderSizeAndRemainder(_numberOfTokens);
+
+            // Pending orders are in synthetic asset tokens for the "sell" version of the orderbook.
+            // In the "buy" version of the orderbook, pending orders are in stablecoin.
+            if (_isBuy) {
+                stablecoin.safeTransferFrom(router, address(this), adjustedOrderSize.mul(oraclePrice).div(10 ** 18));
+                IERC20(syntheticAsset).safeTransfer(_user, adjustedOrderSize);
+            } else {
+                IERC20(syntheticAsset).safeTransferFrom(router, address(this), adjustedOrderSize.mul(10 ** 18).div(oraclePrice));
+                stablecoin.safeTransfer(_user, adjustedOrderSize);
+            }
+
+            {
+            // Gas savings.
+            uint256 newCurrent = current.add(adjustedOrderSize);
+            uint256 lastKey = lastFilledOrderKey;
+
+            current = newCurrent;
+            FilledOrder memory lastFilledOrder = filledOrders[lastKey];
+            if (lastFilledOrder.executionPrice > 0) {
+                filledOrders[lastKey].next = newCurrent;
+            }
+            filledOrders[newCurrent] = FilledOrder({
+                numberOfTokensFilled: adjustedOrderSize,
+                executionPrice: oraclePrice,
+                timestamp: block.timestamp,
+                previous: lastFilledOrder.executionPrice > 0 ? lastKey : 0,
+                next: 0
+            });
+            lastFilledOrderKey = newCurrent;
+            _addToFilledOrdersLookupStructure(newCurrent);
+            }
+
+            emit ExecutedOrder(_user, adjustedOrderSize, oraclePrice);
+            return remainder;
+        }
     }
 
     /**
-    * @notice Cancels the pending order for msg.sender.
+    * @notice Cancels the pending order for the user.
     * @dev If _cancelFullOrder is set to true, _numberOfTokens is ignored.
-    * @dev This function also claims all available tokens for msg.sender.
-    * @dev Transaction will revert if _numberOfTokens exceeds msg.sender's order size.
+    * @dev This function also claims all available tokens for the user.
+    * @dev Transaction will revert if _numberOfTokens exceeds the user's order size.
+    * @dev Only the Router contract can call this function.
+    * @param _user Address of the user.
     * @param _numberOfTokens The number of tokens to cancel.
     * @param _cancelFullOrder Whether to fully cancel the order.
     */
-    function cancelOrder(uint256 _numberOfTokens, bool _cancelFullOrder) external override {
-        // TODO.
+    function cancelOrder(address _user, uint256 _numberOfTokens, bool _cancelFullOrder) external override onlyRouter {
+        uint256 orderIndex = userToOrderIndex[_user];
+        require(orderIndex > 0, "Orderbook: User does not have an order.");
+
+        uint256 orderSize = orders[orderIndex].sub(orders[orderIndex.sub(1)]);
+        require(_numberOfTokens.add(cancelledOrders[orderIndex].amountCancelled) <= orderSize, "Orderbook: Amount cancelled exceeds the order size.");
+
+        // Prevent users from cancelling orders that are already considered "filled".
+        uint256 totalAmountCancelled = _calculateTotalAmountCancelled(orderIndex);
+        require(current.add(totalAmountCancelled) < orders[orderIndex], "Orderbook: Order is already filled.");
+
+        _addToCancelledOrdersLookupStructure(orderIndex);
+
+        uint256 nearestCancelledOrderIndex = _findNearestCancelledOrder(orderIndex);
+
+        // Update the pointers.
+        uint256 nextOrderIndex = cancelledOrders[nearestCancelledOrderIndex].next;
+        cancelledOrders[nextOrderIndex].previous = orderIndex;
+        cancelledOrders[nearestCancelledOrderIndex].next = orderIndex;
+
+        // User does not have a cancelled order yet.
+        if (cancelledOrders[orderIndex].amountCancelled == 0) {
+            cancelledOrders[orderIndex] = CancelledOrder({
+                amountCancelled: _numberOfTokens,
+                timestamp: block.timestamp,
+                previous: nearestCancelledOrderIndex,
+                next: nextOrderIndex
+            });
+        } else {
+            cancelledOrders[orderIndex].amountCancelled = cancelledOrders[orderIndex].amountCancelled.add(_numberOfTokens);
+            cancelledOrders[orderIndex].timestamp = block.timestamp;
+        }
+
+        // Clear the user's order index if the order is considered fully cancelled.
+        if (_cancelFullOrder || _numberOfTokens.add(cancelledOrders[orderIndex].amountCancelled) == orderSize) {
+            userToOrderIndex[_user] = 0;
+            orderIndexToUser[orderIndex] = address(0);
+        }
     }
 
     /**
-    * @notice Claims all available tokens for msg.sender.
+    * @notice Claims all available tokens for the user.
+    * @dev Only the Router contract can call this function.
+    * @param _user Address of the user.
     */
-    function claimTokens() external override {
-        // TODO.
+    function claimTokens(address _user) external override onlyRouter {
+        uint256 orderIndex = userToOrderIndex[_user];
+        require(orderIndex > 0, "Orderbook: User does not have an order.");
+
+        uint256 orderSize = orders[orderIndex].sub(orders[orderIndex.sub(1)]);
+        uint256 totalAmountCancelled = _calculateTotalAmountCancelled(orderIndex);
+        uint256 adjustedCurrent = current.add(totalAmountCancelled);
+        require(adjustedCurrent > orders[orderIndex.sub(1)], "Orderbook: User has no tokens to claim.");
+
+        uint256 averageExecutionPrice = _calculateAverageExecutionPrice(orders[orderIndex.sub(1)].sub(totalAmountCancelled), orders[orderIndex].sub(totalAmountCancelled));
+        require(averageExecutionPrice > 0, "Orderbook: Average execution price is 0.");
+
+        uint256 amountFilled = (adjustedCurrent >= orders[orderIndex]) ? orderSize : orders[orderIndex].sub(adjustedCurrent);
+
+        if (representsBuyOrders) {
+            IERC20(syntheticAsset).safeTransfer(_user, amountFilled.mul(10 ** 18).div(averageExecutionPrice));
+        } else {
+            stablecoin.safeTransfer(_user, amountFilled.mul(averageExecutionPrice).div(10 ** 18));
+        }
+
+        if (amountFilled == orderSize) {
+            userToOrderIndex[_user] = 0;
+            orderIndexToUser[orderIndex] = address(0);
+        }
+
+        emit ClaimedTokens(_user, amountFilled, averageExecutionPrice);
+    }
+
+    /* ========== INTERNAL FUNCTIONS ========== */
+
+    /**
+    * @notice Calculates the average execution price of filled orders that overlap with the user's order range.
+    * @param _start The value of "current" at the start of the user's order range.
+    * @param _end The value of "current" at the end of the user's order range.
+    */
+    function _calculateAverageExecutionPrice(uint256 _start, uint256 _end) internal view returns (uint256) {
+        uint256 totalPriceAndQuantity;
+        uint256 totalQuantity;
+        uint256 filledOrderKey = _findNearestFilledOrder(_start);
+
+        if (filledOrderKey == 0) {
+            return 0;
+        }
+
+        while (filledOrderKey <= _end) {
+            FilledOrder memory filledOrder = filledOrders[filledOrderKey];
+            // min(order's end, user's end).
+            uint256 adjustedEnd = (filledOrderKey.add(filledOrder.numberOfTokensFilled) > _end) ? _end : filledOrderKey.add(filledOrder.numberOfTokensFilled);
+            // max(order's start, user's start).
+            uint256 adjustedStart = (filledOrderKey > _start) ? filledOrderKey : _start;
+            uint256 overlap = adjustedEnd.sub(adjustedStart);
+            totalQuantity = totalQuantity.add(overlap);
+            totalPriceAndQuantity = totalPriceAndQuantity.add(overlap.mul(filledOrder.executionPrice).div(10 ** 18));
+            filledOrderKey = filledOrder.next;
+        }
+
+        return totalPriceAndQuantity.mul(10 ** 18).div(totalQuantity);
+    }
+
+    /**
+    * @notice Calculates the total number of tokens cancelled between "current" and the user's value of "current".
+    * @param _orderIndex The order index to calculate from.
+    */
+    function _calculateTotalAmountCancelled(uint256 _orderIndex) internal view returns (uint256 totalAmountCancelled) {
+        _orderIndex = _findNearestCancelledOrder(_orderIndex);
+
+        while (orders[_orderIndex] > current) {
+            totalAmountCancelled = totalAmountCancelled.add(cancelledOrders[_orderIndex].amountCancelled);
+            _orderIndex = cancelledOrders[_orderIndex].previous;
+        }
+    }
+
+    /**
+    * @notice Finds the nearest entry in cancelledOrderLookup that has a value <= _orderIndex.
+    * @dev Returns 0 if there are no entries in cancelledOrderLookup that satisfy the condition.
+    * @param _orderIndex The order index to query.
+    */
+    function _findNearestCancelledOrder(uint256 _orderIndex) internal view returns (uint256) {
+        uint256 magnitude = TradegenMath.log10(_orderIndex);
+        uint256 prefix;
+
+        while (_orderIndex > 0) {
+            string memory metadataKey = string.concat(Strings.toString(magnitude), "/", (prefix == 0) ? "" : Strings.toString(prefix), "/m");
+            LookupValue memory value = cancelledOrderLookup[metadataKey];
+            
+            // Metadata exists.
+            if (value.isLastDigit) {
+                while (value.previousDigit > _orderIndex % 10) {
+                    string memory entryKey = string.concat(Strings.toString(magnitude), "/", (prefix == 0) ? "" : Strings.toString(prefix), "/", Strings.toString(_orderIndex % (10 ** magnitude)));
+                    value.previousDigit = cancelledOrderLookup[entryKey].previousDigit;
+                }
+            }
+
+            prefix = prefix.add(_orderIndex % (10 ** magnitude));
+            magnitude = magnitude.sub(1);
+            _orderIndex = _orderIndex.div(10);
+        }
+
+        return prefix;
+    }
+
+    /**
+    * @notice Finds the nearest entry in filledOrderLookup that has a value <= _current.
+    * @dev Returns 0 if there are no entries in filledOrderLookup that satisfy the condition.
+    * @param _current The value of "current" at which the user's order is considered filled.
+    */
+    function _findNearestFilledOrder(uint256 _current) internal view returns (uint256) {
+        uint256 magnitude = TradegenMath.log10(_current);
+        uint256 prefix;
+
+        while (_current > 0) {
+            string memory metadataKey = string.concat(Strings.toString(magnitude), "/", (prefix == 0) ? "" : Strings.toString(prefix), "/m");
+            LookupValue memory value = filledOrderLookup[metadataKey];
+            
+            // Metadata exists.
+            if (value.isLastDigit) {
+                while (value.previousDigit > _current % 10) {
+                    string memory entryKey = string.concat(Strings.toString(magnitude), "/", (prefix == 0) ? "" : Strings.toString(prefix), "/", Strings.toString(_current % (10 ** magnitude)));
+                    value.previousDigit = filledOrderLookup[entryKey].previousDigit;
+                }
+            }
+
+            prefix = prefix.add(_current % (10 ** magnitude));
+            magnitude = magnitude.sub(1);
+            _current = _current.div(10);
+        }
+
+        return prefix;
+    }
+
+    /**
+    * @notice Adds a new entry to filledOrderLookup.
+    * @param _current The value of 'current' at which the order was filled.
+    */
+    function _addToFilledOrdersLookupStructure(uint256 _current) internal {
+        uint256 magnitude = TradegenMath.log10(_current);
+        string memory prefix;
+
+        while (_current > 0) {
+            string memory metadataKey = string.concat(Strings.toString(magnitude), "/", prefix, "/m");
+            LookupValue memory value = filledOrderLookup[metadataKey];
+            
+            // Metadata does not exist.
+            if (!value.isLastDigit) {
+                filledOrderLookup[metadataKey] = LookupValue({
+                    isLastDigit: true,
+                    previousDigit: uint8(_current % (10 ** magnitude))
+                });
+
+                string memory entryKey = string.concat(Strings.toString(magnitude), "/", prefix, "/", Strings.toString(_current % (10 ** magnitude)));
+                filledOrderLookup[entryKey] = LookupValue({
+                    isLastDigit: false,
+                    previousDigit: 0
+                });
+            } else {
+                filledOrderLookup[metadataKey].previousDigit = value.previousDigit;
+
+                string memory entryKey = string.concat(Strings.toString(magnitude), "/", prefix, "/", Strings.toString(_current % (10 ** magnitude)));
+                filledOrderLookup[entryKey] = LookupValue({
+                    isLastDigit: false,
+                    previousDigit: value.previousDigit
+                });
+            }
+
+            prefix = string.concat(prefix, Strings.toString(_current % (10 ** magnitude)));
+            magnitude = magnitude.sub(1);
+            _current = _current.div(10);
+        }
+    }
+
+    /**
+    * @notice Adds a new entry to cancelledOrderLookup.
+    * @param _orderIndex The user's order index.
+    */
+    function _addToCancelledOrdersLookupStructure(uint256 _orderIndex) internal {
+        uint256 magnitude = TradegenMath.log10(_orderIndex);
+        string memory prefix;
+
+        while (_orderIndex > 0) {
+            string memory metadataKey = string.concat(Strings.toString(magnitude), "/", prefix, "/m");
+            LookupValue memory value = cancelledOrderLookup[metadataKey];
+            
+            // Metadata does not exist.
+            if (!value.isLastDigit) {
+                cancelledOrderLookup[metadataKey] = LookupValue({
+                    isLastDigit: true,
+                    previousDigit: uint8(_orderIndex % (10 ** magnitude))
+                });
+
+                string memory entryKey = string.concat(Strings.toString(magnitude), "/", prefix, "/", Strings.toString(_orderIndex % (10 ** magnitude)));
+                cancelledOrderLookup[entryKey] = LookupValue({
+                    isLastDigit: false,
+                    previousDigit: 0
+                });
+            } else {
+                cancelledOrderLookup[metadataKey].previousDigit = value.previousDigit;
+
+                string memory entryKey = string.concat(Strings.toString(magnitude), "/", prefix, "/", Strings.toString(_orderIndex % (10 ** magnitude)));
+                cancelledOrderLookup[entryKey] = LookupValue({
+                    isLastDigit: false,
+                    previousDigit: value.previousDigit
+                });
+            }
+
+            prefix = string.concat(prefix, Strings.toString(_orderIndex % (10 ** magnitude)));
+            magnitude = magnitude.sub(1);
+            _orderIndex = _orderIndex.div(10);
+        }
+    }
+
+    /**
+    * @notice Returns the adjusted order size and the remaining amount.
+    * @dev The remaining amount is the number of tokens that exceeds the available number of tokens in the orderbook.
+    * @param _numberOfTokens Desired order size.
+    */
+    function _computeAdjustedOrderSizeAndRemainder(uint256 _numberOfTokens) internal view returns (uint256, uint256) {
+        // Gas savings.
+        uint256 availableTokens = getAvailableTokensInOrderbook();
+
+        if (_numberOfTokens <= availableTokens) {
+            return (_numberOfTokens, _numberOfTokens);
+        }
+
+        return (availableTokens, availableTokens.sub(_numberOfTokens));
     }
 
     /* ========== RESTRICTED FUNCTIONS ========== */
@@ -187,8 +546,9 @@ contract Orderbook is IOrderbook, Ownable {
 
     /* ========== EVENTS ========== */
 
-    event PlacedOrder(address user, uint256 numberOfTokens, uint256 orderIndex);
-    event ClaimedTokens(address user, uint256 numberOfTokens, uint256 dollarValue);
+    event PlacedOrder(address user, uint256 numberOfTokens, uint256 orderIndex, uint256 remainder);
+    event ExecutedOrder(address user, uint256 numberOfTokens, uint256 executionPrice);
+    event ClaimedTokens(address user, uint256 numberOfTokens, uint256 averageExecutionPrice);
     event CancelledAnOrder(address user, uint256 numberOfTokens, uint256 orderIndex);
     event PausedTrading(bool tradingStatus);
 }

@@ -22,7 +22,7 @@ interface IOrderbook {
     * @notice Returns the number of tokens that the given user can claim.
     * @param _user Address of the user.
     */
-    function getAvailableTokens(address _user) external view returns (uint256);
+    function getAvailableTokensForUser(address _user) external view returns (uint256);
 
     /**
     * @notice Returns the dollar value of the given user's available tokens.
@@ -31,26 +31,39 @@ interface IOrderbook {
     function getAvailableDollarAmount(address _user) external view returns (uint256);
 
     /**
-    * @notice Places an order for the given number of tokens.
-    * @dev Transaction will revert if _numberOfTokens exceeds msg.sender's balance.
-    * @param _numberOfTokens The number of tokens to buy/sell.
+    * @notice Returns the total size of open orders.
     */
-    function placeOrder(uint256 _numberOfTokens) external;
+    function getAvailableTokensInOrderbook() external view returns (uint256);
 
     /**
-    * @notice Cancels the pending order for msg.sender.
+    * @notice Places an order for the given number of tokens.
+    * @dev Transaction will revert if _numberOfTokens exceeds the user's balance.
+    * @dev Only the Router contract can call this function.
+    * @param _user Address of the user.
+    * @param _isBuy Whether the order represents a 'buy'.
+    * @param _numberOfTokens The number of tokens to buy/sell.
+    * @return uint256 The number of tokens that could not be filled.
+    */
+    function placeOrder(address _user, bool _isBuy, uint256 _numberOfTokens) external returns (uint256);
+
+    /**
+    * @notice Cancels the pending order for the user.
     * @dev If _cancelFullOrder is set to true, _numberOfTokens is ignored.
-    * @dev This function also claims all available tokens for msg.sender.
-    * @dev Transaction will revert if _numberOfTokens exceeds msg.sender's order size.
+    * @dev This function also claims all available tokens for the user.
+    * @dev Transaction will revert if _numberOfTokens exceeds the user's order size.
+    * @dev Only the Router contract can call this function.
+    * @param _user Address of the user.
     * @param _numberOfTokens The number of tokens to cancel.
     * @param _cancelFullOrder Whether to fully cancel the order.
     */
-    function cancelOrder(uint256 _numberOfTokens, bool _cancelFullOrder) external;
+    function cancelOrder(address _user, uint256 _numberOfTokens, bool _cancelFullOrder) external;
 
     /**
-    * @notice Claims all available tokens for msg.sender.
+    * @notice Claims all available tokens for the user.
+    * @dev Only the Router contract can call this function.
+    * @param _user Address of the user.
     */
-    function claimTokens() external;
+    function claimTokens(address _user) external;
 
     /**
     * @notice Pauses trading for this asset.
