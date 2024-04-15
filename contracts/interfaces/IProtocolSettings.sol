@@ -15,4 +15,24 @@ interface IProtocolSettings {
     * @dev This value is expressed in two decimals. Ex) A 0.3% mint fee would have the value 30.
     */
     function mintFee() external view returns (uint256);
+
+    /**
+    * @notice Returns the minimum value that a user can set for their minimumTimeUntilDiscountStarts setting.
+    */
+    function minimumMinimumTimeUntilDiscountStarts() external view returns (uint256);
+
+    /**
+    * @notice Returns the maximum value that a user can set for their minimumTimeUntilDiscountStarts setting.
+    */
+    function maximumMinimumTimeUntilDiscountStarts() external view returns (uint256);
+
+    /**
+    * @notice Returns the minimum value that a user can set for their timeUntilMaxDiscount setting.
+    */
+    function minimumTimeUntilMaxDiscount() external view returns (uint256);
+
+    /**
+    * @notice Returns the maximum value that a user can set for their timeUntilMaxDiscount setting.
+    */
+    function maximumTimeUntilMaxDiscount() external view returns (uint256);
 }
