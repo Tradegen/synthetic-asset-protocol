@@ -23,6 +23,7 @@ contract SyntheticAssetToken is ISyntheticAssetToken, ERC20, ReentrancyGuard {
     ISyntheticAssetTokenRegistry public registry;
     IOracle public oracle;
     IProtocolSettings public protocolSettings;
+    address public immutable treasury;
     IERC20 public stablecoin;
     address public override asset;
     uint256 public override maxSupply;
@@ -31,6 +32,7 @@ contract SyntheticAssetToken is ISyntheticAssetToken, ERC20, ReentrancyGuard {
     constructor(address _registry,
                 address _oracle,
                 address _protocolSettings,
+                address _treasury,
                 address _stablecoin,
                 address _asset,
                 uint256 _maxSupply,
@@ -41,6 +43,7 @@ contract SyntheticAssetToken is ISyntheticAssetToken, ERC20, ReentrancyGuard {
         registry = ISyntheticAssetTokenRegistry(_registry);
         oracle = IOracle(_oracle);
         protocolSettings = IProtocolSettings(_protocolSettings);
+        treasury = _treasury;
         stablecoin = IERC20(_stablecoin);
         asset = _asset;
         maxSupply = _maxSupply;
@@ -79,6 +82,7 @@ contract SyntheticAssetToken is ISyntheticAssetToken, ERC20, ReentrancyGuard {
         uint256 dollarValue = oraclePrice.mul(_numberOfTokens).div(10 ** 18);
         uint256 mintFeeValue = dollarValue.mul(protocolSettings.mintFee().add(10000)).div(10000);
         stablecoin.safeTransferFrom(msg.sender, address(this), dollarValue.add(mintFeeValue));
+        stablecoin.safeTransfer(treasury, mintFeeValue);
 
         _mint(msg.sender, _numberOfTokens);
 
