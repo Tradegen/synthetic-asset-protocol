@@ -19,10 +19,16 @@ interface IUserSettings {
     function maximumDiscount(address _user) external view returns (uint256);
 
     /**
+    * @notice Returns the starting discount at which the user's order can be filled.
+    * @dev The discount increases linearly to maximumDiscount over timeUntilMaxDiscount.
+    */
+    function startingDiscount(address _user) external view returns (uint256);
+
+    /**
     * @notice Registers a user with the given values for the user's settings.
     * @dev This transaction will revert if the user has already been registered.
     */
-    function registerUser(uint256 _minimumTimeUntilDiscountStarts, uint256 _timeUntilMaxDiscount, uint256 _maximumDiscount) external;
+    function registerUser(uint256 _minimumTimeUntilDiscountStarts, uint256 _timeUntilMaxDiscount, uint256 _maximumDiscount, uint256 _startingDiscount) external;
 
     /**
     * @notice Sets the user's minimumTimeUntilDiscountStarts to the given value.

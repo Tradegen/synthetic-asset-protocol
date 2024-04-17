@@ -14,12 +14,14 @@ import './interfaces/IOrderbookFactory.sol';
 contract OrderbookFactory is IOrderbookFactory, Ownable {
     address public immutable oracle;
     address public immutable protocolSettings;
+    address public immutable userSettings;
     address public immutable stablecoin;
     address public router;
 
-    constructor(address _oracle, address _protocolSettings, address _stablecoin) Ownable() {
+    constructor(address _oracle, address _protocolSettings, address _userSettings, address _stablecoin) Ownable() {
         oracle = _oracle;
         protocolSettings = _protocolSettings;
+        userSettings = _userSettings;
         stablecoin = _stablecoin;
     }
 
@@ -33,7 +35,7 @@ contract OrderbookFactory is IOrderbookFactory, Ownable {
     * @return address Address of the deployed Orderbook contract.
     */
     function createOrderbook(address _syntheticAsset, bool _representsBuyOrders) external override onlyRouter returns (address) {
-        address orderbook = address(new Orderbook(router, oracle, protocolSettings, stablecoin, _syntheticAsset, _representsBuyOrders));
+        address orderbook = address(new Orderbook(router, oracle, protocolSettings, userSettings, stablecoin, _syntheticAsset, _representsBuyOrders));
 
         emit CreatedOrderbook(_syntheticAsset, _representsBuyOrders, orderbook);
 

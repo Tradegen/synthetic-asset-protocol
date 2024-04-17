@@ -11,6 +11,7 @@ import "./openzeppelin-solidity/contracts/SafeMath.sol";
 // Interfaces.
 import './interfaces/IOracle.sol';
 import './interfaces/IProtocolSettings.sol';
+import './interfaces/IUserSettings.sol';
 
 // Libraries.
 import "./libraries/TradegenMath.sol";
@@ -46,6 +47,7 @@ contract Orderbook is IOrderbook, Ownable {
     address public immutable router;
     IOracle public immutable oracle;
     IProtocolSettings public immutable protocolSettings;
+    IUserSettings public immutable userSettings;
     IERC20 public immutable stablecoin;
 
     address public immutable syntheticAsset;
@@ -62,6 +64,9 @@ contract Orderbook is IOrderbook, Ownable {
     mapping (uint256 => address) public orderIndexToUser;
     // (user address => order index).
     mapping (address => uint256) public userToOrderIndex;
+
+    // (order index => timestamp at which the order was placed).
+    mapping (uint256 => uint256) public orderTimestamps;
 
     // Used to get the nearest index in the cancelled order ledger to a given index.
     // Keys are in the format "<magnitude>/<prefix>/<metadata/digit>".
@@ -81,10 +86,11 @@ contract Orderbook is IOrderbook, Ownable {
     // Keys represent the new value of 'current' at the time the order was filled.
     mapping (uint256 => FilledOrder) public filledOrders;
 
-    constructor(address _router, address _oracle, address _protocolSettings, address _stablecoin, address _syntheticAsset, bool _representsBuyOrders) Ownable() {
+    constructor(address _router, address _oracle, address _protocolSettings, address _userSettings, address _stablecoin, address _syntheticAsset, bool _representsBuyOrders) Ownable() {
         router = _router;
         oracle = IOracle(_oracle);
         protocolSettings = IProtocolSettings(_protocolSettings);
+        userSettings = IUserSettings(_userSettings);
         stablecoin = IERC20(_stablecoin);
         syntheticAsset = _syntheticAsset;
         representsBuyOrders = _representsBuyOrders;
@@ -178,6 +184,7 @@ contract Orderbook is IOrderbook, Ownable {
             userToOrderIndex[msg.sender] = orderIndex;
             end = newEnd;
             orders[orderIndex] = newEnd;
+            orderTimestamps[orderIndex] = block.timestamp;
 
             emit PlacedOrder(msg.sender, _numberOfTokens, orderIndex, 0);
         } else {
@@ -227,6 +234,56 @@ contract Orderbook is IOrderbook, Ownable {
 
             emit ExecutedOrder(msg.sender, adjustedOrderSize, oraclePrice, remainder);
         }
+    }
+
+    /**
+    * @notice Executes the given order as a market maker.
+    * @param _orderIndex The index of the order to fill.
+    */
+    function executeOrderAsMarketMaker(uint256 _orderIndex) external override {
+        require(orders[_orderIndex] > 0, "Orderbook: Order is either out of bounds or completely filled.");
+
+        address feeToken;
+        uint256 usageFee;
+        (feeToken, usageFee) = oracle.getUsageFeeInfo(syntheticAsset);
+
+        IERC20(feeToken).safeTransferFrom(msg.sender, address(this), usageFee);
+        IERC20(feeToken).approve(address(oracle), usageFee);
+        uint256 oraclePrice = oracle.getLatestPrice(syntheticAsset);
+
+        address user = orderIndexToUser[_orderIndex];
+        uint256 adjustedCurrent = current.add(_calculateTotalAmountCancelled(_orderIndex));
+        uint256 unfilledAmount = (adjustedCurrent > orders[_orderIndex]) ? 0 : (adjustedCurrent > orders[_orderIndex.sub(1)]) ? orders[_orderIndex].sub(orders[_orderIndex.sub(1)]) : orders[_orderIndex].sub(adjustedCurrent);
+
+        require(block.timestamp >= userSettings.minimumTimeUntilDiscountStarts(user), "Orderbook: Order is not ready to be filled by a market maker.");
+
+        uint256 elapsedTime = block.timestamp.sub(userSettings.minimumTimeUntilDiscountStarts(user));
+        uint256 discount = (elapsedTime > userSettings.timeUntilMaxDiscount(user)) ? userSettings.maximumDiscount(user) : userSettings.startingDiscount(user).add((userSettings.maximumDiscount(user).sub(userSettings.startingDiscount(user))).mul(elapsedTime).div(userSettings.timeUntilMaxDiscount(user)));
+
+        if (representsBuyOrders) {
+            IERC20(syntheticAsset).safeTransferFrom(msg.sender, user, unfilledAmount.mul(uint256(10000).sub(discount)).div(10000).mul(10 ** 18).div(oraclePrice));
+            stablecoin.safeTransfer(msg.sender, unfilledAmount);
+        } else {
+            stablecoin.safeTransferFrom(msg.sender, user, unfilledAmount.mul(uint256(10000).sub(discount)).div(10000).mul(oraclePrice).div(10 ** 18));
+            IERC20(syntheticAsset).safeTransfer(msg.sender, unfilledAmount);
+        }
+
+        // Cancel the order.
+        orders[_orderIndex] = 0;
+        orderIndexToUser[_orderIndex] = address(0);
+        userToOrderIndex[user] = 0;
+        orderTimestamps[_orderIndex] = 0;
+
+        _addToCancelledOrdersLookupStructure(_orderIndex);
+
+        uint256 nearestCancelledOrderIndex = _findNearestCancelledOrder(_orderIndex);
+
+        // Update the pointers.
+        uint256 nextOrderIndex = cancelledOrders[nearestCancelledOrderIndex].next;
+        cancelledOrders[nextOrderIndex].previous = _orderIndex;
+        cancelledOrders[nearestCancelledOrderIndex].next = _orderIndex;
+
+        emit ExecutedOrderAsMarketMaker(msg.sender, user, _orderIndex, unfilledAmount, oraclePrice, discount);
     }
 
     /**
@@ -280,6 +337,8 @@ contract Orderbook is IOrderbook, Ownable {
         if (_cancelFullOrder || _numberOfTokens.add(cancelledOrders[orderIndex].amountCancelled) == orderSize) {
             userToOrderIndex[msg.sender] = 0;
             orderIndexToUser[orderIndex] = address(0);
+            orderTimestamps[orderIndex] = 0;
+            orders[orderIndex] = 0;
         }
     }
 
@@ -309,6 +368,8 @@ contract Orderbook is IOrderbook, Ownable {
         if (amountFilled == orderSize) {
             userToOrderIndex[msg.sender] = 0;
             orderIndexToUser[orderIndex] = address(0);
+            orderTimestamps[orderIndex] = 0;
+            orders[orderIndex] = 0;
         }
 
         emit ClaimedTokens(msg.sender, amountFilled, averageExecutionPrice);
@@ -529,12 +590,12 @@ contract Orderbook is IOrderbook, Ownable {
     /* ========== MODIFIERS ========== */
 
     modifier onlyRouter() {
-        require(msg.sender == router, "SyntheticAssetTokenRegistry: Only the Router contract can call this function.");
+        require(msg.sender == router, "Orderbook: Only the Router contract can call this function.");
         _;
     }
 
     modifier tradingIsNotPaused() {
-        require(!tradingIsPaused, "SyntheticAssetTokenRegistry: This function can only be called when trading is not paused.");
+        require(!tradingIsPaused, "Orderbook: This function can only be called when trading is not paused.");
         _;
     }
 
@@ -542,6 +603,7 @@ contract Orderbook is IOrderbook, Ownable {
 
     event PlacedOrder(address user, uint256 numberOfTokens, uint256 orderIndex, uint256 remainder);
     event ExecutedOrder(address user, uint256 numberOfTokens, uint256 executionPrice, uint256 remainder);
+    event ExecutedOrderAsMarketMaker(address marketMaker, address user, uint256 orderIndex, uint256 unfilledAmount, uint256 oraclePrice, uint256 discount);
     event ClaimedTokens(address user, uint256 numberOfTokens, uint256 averageExecutionPrice);
     event CancelledAnOrder(address user, uint256 numberOfTokens, uint256 orderIndex);
     event PausedTrading(bool tradingStatus);

@@ -54,9 +54,16 @@ interface IOrderbook {
     function cancelOrder(uint256 _numberOfTokens, bool _cancelFullOrder) external;
 
     /**
+    * @notice Executes the given order as a market maker.
+    * @param _orderIndex The index of the order to fill.
+    */
+    function executeOrderAsMarketMaker(uint256 _orderIndex) external;
+
+    /**
     * @notice Claims all available tokens for the user.
     */
     function claimTokens() external;
+    
 
     /**
     * @notice Pauses trading for this asset.

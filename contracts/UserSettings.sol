@@ -14,6 +14,7 @@ contract UserSettings is IUserSettings {
     mapping (address => uint256) public override minimumTimeUntilDiscountStarts;
     mapping (address => uint256) public override timeUntilMaxDiscount;
     mapping (address => uint256) public override maximumDiscount;
+    mapping (address => uint256) public override startingDiscount;
 
     constructor(address _protocolSettings) {
         protocolSettings = IProtocolSettings(_protocolSettings);
@@ -25,7 +26,7 @@ contract UserSettings is IUserSettings {
     * @notice Registers a user with the given values for the user's settings.
     * @dev This transaction will revert if the user has already been registered.
     */
-    function registerUser(uint256 _minimumTimeUntilDiscountStarts, uint256 _timeUntilMaxDiscount, uint256 _maximumDiscount) external override {
+    function registerUser(uint256 _minimumTimeUntilDiscountStarts, uint256 _timeUntilMaxDiscount, uint256 _maximumDiscount, uint256 _startingDiscount) external override {
         require(minimumTimeUntilDiscountStarts[msg.sender] == 0, "UserSettings: User is already registered.");
         require(_minimumTimeUntilDiscountStarts >= protocolSettings.minimumMinimumTimeUntilDiscountStarts()
                 && _minimumTimeUntilDiscountStarts <= protocolSettings.maximumMinimumTimeUntilDiscountStarts(),
@@ -36,12 +37,14 @@ contract UserSettings is IUserSettings {
         require(_maximumDiscount <= protocolSettings.maxDiscount()
                 && _maximumDiscount > 0,
                 "UserSettings: Maximum discount is out of range.");
+        require(_startingDiscount > 0 && _startingDiscount < _maximumDiscount, "UserSettings: Starting discount is out of range.");
 
         minimumTimeUntilDiscountStarts[msg.sender] = _minimumTimeUntilDiscountStarts;
         timeUntilMaxDiscount[msg.sender] = _timeUntilMaxDiscount;
         maximumDiscount[msg.sender] = _maximumDiscount;
+        startingDiscount[msg.sender] = _startingDiscount;
         
-        emit RegisteredUser(msg.sender, _minimumTimeUntilDiscountStarts, _timeUntilMaxDiscount, _maximumDiscount);
+        emit RegisteredUser(msg.sender, _minimumTimeUntilDiscountStarts, _timeUntilMaxDiscount, _maximumDiscount, _startingDiscount);
     }
 
     /**
@@ -88,7 +91,7 @@ contract UserSettings is IUserSettings {
 
     /* ========== EVENTS ========== */
 
-    event RegisteredUser(address user, uint256 minimumTimeUntilDiscountStarts, uint256 timeUntilMaxDiscount, uint256 maximumDiscount);
+    event RegisteredUser(address user, uint256 minimumTimeUntilDiscountStarts, uint256 timeUntilMaxDiscount, uint256 maximumDiscount, uint256 startingDiscount);
     event UpdateMinimumTimeUntilDiscountStarts(address user, uint256 oldValue, uint256 newValue);
     event UpdateTimeUntilMaxDiscount(address user, uint256 oldValue, uint256 newValue);
     event UpdateMaximumDiscount(address user, uint256 oldValue, uint256 newValue);
