@@ -13,14 +13,12 @@ import './interfaces/ISyntheticAssetTokenFactory.sol';
 
 contract SyntheticAssetTokenFactory is ISyntheticAssetTokenFactory, Ownable {
     address public immutable oracle;
-    address public immutable treasury;
     address public immutable protocolSettings;
     address public immutable stablecoin;
     address public registry;
 
-    constructor(address _oracle, address _treasury, address _protocolSettings, address _stablecoin) Ownable() {
+    constructor(address _oracle, address _protocolSettings, address _stablecoin) Ownable() {
         oracle = _oracle;
-        treasury = _treasury;
         protocolSettings = _protocolSettings;
         stablecoin = _stablecoin;
     }
@@ -37,7 +35,7 @@ contract SyntheticAssetTokenFactory is ISyntheticAssetTokenFactory, Ownable {
     * @return address Address of the deployed SyntheticAssetToken contract.
     */
     function createSyntheticAssetToken(address _asset, uint256 _maxSupply, string memory _name, string memory _symbol) external override returns (address) {
-        address syntheticAssetToken = address(new SyntheticAssetToken(registry, oracle, protocolSettings, treasury, stablecoin, _asset, _maxSupply, _name, _symbol));
+        address syntheticAssetToken = address(new SyntheticAssetToken(registry, oracle, protocolSettings, stablecoin, _asset, _maxSupply, _name, _symbol));
 
         emit CreatedSyntheticAssetToken(_asset, _maxSupply, _name, _symbol);
 
