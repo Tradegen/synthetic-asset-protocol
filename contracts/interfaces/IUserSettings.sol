@@ -44,4 +44,9 @@ interface IUserSettings {
     * @notice Sets the user's maximumDiscount to the given value.
     */
     function updateMaximumDiscount(uint256 _newValue) external;
+
+    /**
+    * @notice Sets the user's startingDiscount to the given value.
+    */
+    function updateStartingDiscount(uint256 _newValue) external;
 }

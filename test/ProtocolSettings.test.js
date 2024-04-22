@@ -14,10 +14,6 @@ describe("ProtocolSettings", () => {
     otherUser = signers[1];
 
     ProtocolSettingsFactory = await ethers.getContractFactory('ProtocolSettings');
-
-    scheduleCurrent = await ScheduleFactory.deploy(CYCLE_DURATION * 4, startTimeCurrent);
-    await scheduleCurrent.deployed();
-    scheduleCurrentAddress = scheduleCurrent.address;
   });
 
   beforeEach(async () => {

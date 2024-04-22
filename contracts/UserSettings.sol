@@ -51,6 +51,7 @@ contract UserSettings is IUserSettings {
     * @notice Sets the user's minimumTimeUntilDiscountStarts to the given value.
     */
     function updateMinimumTimeUntilDiscountStarts(uint256 _newValue) external override {
+        require(minimumTimeUntilDiscountStarts[msg.sender] > 0, "UserSettings: User is not registered.");
         require(_newValue >= protocolSettings.minimumMinimumTimeUntilDiscountStarts()
                 && _newValue <= protocolSettings.maximumMinimumTimeUntilDiscountStarts(),
                 "UserSettings: Minimum time until discount starts is out of range.");
@@ -65,6 +66,7 @@ contract UserSettings is IUserSettings {
     * @notice Sets the user's timeUntilMaxDiscount to the given value.
     */
     function updateTimeUntilMaxDiscount(uint256 _newValue) external override {
+        require(minimumTimeUntilDiscountStarts[msg.sender] > 0, "UserSettings: User is not registered.");
         require(_newValue >= protocolSettings.minimumTimeUntilMaxDiscount()
                 && _newValue <= protocolSettings.maximumTimeUntilMaxDiscount(),
                 "UserSettings: Time until max discount is out of range.");
@@ -79,8 +81,9 @@ contract UserSettings is IUserSettings {
     * @notice Sets the user's maximumDiscount to the given value.
     */
     function updateMaximumDiscount(uint256 _newValue) external override {
+        require(minimumTimeUntilDiscountStarts[msg.sender] > 0, "UserSettings: User is not registered.");
         require(_newValue <= protocolSettings.maxDiscount()
-                && _newValue > 0,
+                && _newValue > startingDiscount[msg.sender],
                 "UserSettings: Maximum discount is out of range.");
 
         uint256 oldValue = maximumDiscount[msg.sender];
@@ -89,10 +92,26 @@ contract UserSettings is IUserSettings {
         emit UpdateMaximumDiscount(msg.sender, oldValue, _newValue);
     }
 
+    /**
+    * @notice Sets the user's startingDiscount to the given value.
+    */
+    function updateStartingDiscount(uint256 _newValue) external override {
+        require(minimumTimeUntilDiscountStarts[msg.sender] > 0, "UserSettings: User is not registered.");
+        require(_newValue < maximumDiscount[msg.sender]
+                && _newValue > 0,
+                "UserSettings: Starting discount is out of range.");
+
+        uint256 oldValue = startingDiscount[msg.sender];
+        startingDiscount[msg.sender] = _newValue;
+
+        emit UpdateStartingDiscount(msg.sender, oldValue, _newValue);
+    }
+
     /* ========== EVENTS ========== */
 
     event RegisteredUser(address user, uint256 minimumTimeUntilDiscountStarts, uint256 timeUntilMaxDiscount, uint256 maximumDiscount, uint256 startingDiscount);
     event UpdateMinimumTimeUntilDiscountStarts(address user, uint256 oldValue, uint256 newValue);
     event UpdateTimeUntilMaxDiscount(address user, uint256 oldValue, uint256 newValue);
     event UpdateMaximumDiscount(address user, uint256 oldValue, uint256 newValue);
+    event UpdateStartingDiscount(address user, uint256 oldValue, uint256 newValue);
 }
