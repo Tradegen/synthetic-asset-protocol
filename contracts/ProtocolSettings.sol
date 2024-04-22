@@ -16,7 +16,14 @@ contract ProtocolSettings is IProtocolSettings, Ownable {
     uint256 public override minimumTimeUntilMaxDiscount;
     uint256 public override maximumTimeUntilMaxDiscount;
 
-    constructor() Ownable() {}
+    constructor() Ownable() {
+        maxDiscount = 2000;
+        mintFee = 100;
+        minimumMinimumTimeUntilDiscountStarts = 10 minutes;
+        maximumMinimumTimeUntilDiscountStarts = 1 days;
+        minimumTimeUntilMaxDiscount = 1 hours;
+        maximumTimeUntilMaxDiscount = 1 weeks;
+    }
 
     /* ========== RESTRICTED FUNCTIONS ========== */
 
